@@ -1,0 +1,1124 @@
+补充知识：
+1.存储大数据的方式：分布式存储技术SCSI，磁盘阵列
+2.安装hadoop对虚拟机名称有强依赖关系，必须有指定的正向解析与反向解析
+eg:
+192.168.3.114   ansible
+192.168.3.157   web1
+192.168.3.183   web2
+192.168.3.159   db1
+192.168.3.116   db2
+192.168.3.126   cache
+
+***安装hadoop
+**首先确保安装java-1.8.0-openjdk-devel
+[root@ansible ~]# ansible all -m shell -a 'yum -y install java-1.8.0-openjdk-devel'
+#查看java进程
+[root@ansible ~]# ansible all -m shell -a 'jps'
+[root@ansible ~]# tar -zxf hadoop-2.7.6.tar.gz
+[root@ansible ~]# mv hadoop-2.7.6 /usr/local/hadoop
+[root@ansible ~]# cd /usr/local/hadoop/
+[root@ansible ~]# cd etc/hadoop/
+#查找java安装路径
+[root@ansible hadoop]# rpm -ql java-1.8.0-openjdk
+[root@ansible hadoop]# vim hadoop-env.sh
+ 25 export JAVA_HOME="/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.131-11.b12.el7.x86_6    4/jre"
+ 33 export HADOOP_CONF_DIR="/usr/local/hadoop/etc/hadoop"
+[root@ansible hadoop]# cd ../..
+[root@ansible hadoop]# ./bin/hadoop version
+Hadoop 2.7.6
+Subversion https://shv@git-wip-us.apache.org/repos/asf/hadoop.git -r 085099c66cf28be31604560c376fa282e69282b8
+Compiled by kshvachk on 2018-04-18T01:33Z
+Compiled with protoc 2.5.0
+From source with checksum 71e2695531cb3360ab74598755d036
+This command was run using /usr/local/hadoop/share/hadoop/common/hadoop-common-2.7.6.jar
+*大数据测试高频词汇
+[root@ansible hadoop]# mkdir oo
+[root@ansible hadoop]# cp *.txt oo/
+[root@ansible hadoop]# ./bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.6.jar wordcount oo xx
+[root@ansible hadoop]# cat xx/part-r-00000
+
+**hadoop三大核心组件:hdfs(配置文件为:hdfs-site.xml),mapreduce(配置文件为:mapred-site.xml),yarn(配置文件为:yarn-site.xml)
+全局配置文件：core-site.xml
+节点配置文件:slaves 
+
+***搭建完全分布式hadoop
+**系统规划：
+主机			角色			软件
+192.168.3.114	NameNode		HDFS		ansible
+			Secodary NameNode
+192.168.3.159	DataNode		HDFS		db1
+192.168.3.116	DataNode		HDFS		db2
+192.168.3.157	DataNode		HDFS		web1
+**基础环境准备
+*新开启4台虚拟机
+ansible,db1,db2,web1vi
+*禁用selinux
+[root@ansible hadoop]# vim /etc/selinux/config
+SELINUX=disabled
+[root@ansible hadoop]# getenforce
+[root@ansible hadoop]# ansible all -m shell -a 'getenforce'
+*禁用firewalld
+#systemctl stop firewalld
+[root@ansible hadoop]# ansible all -m shell -a 'systemctl stop firewalld'
+[root@ansible hadoop]# ansible all -m shell -a 'systemctl mask firewalld'
+*安装java-1.8.0-1.8.0-openjdk-devel
+[root@ansible hadoop]# yum -y install java-1.8.0-openjdk-devel
+[root@ansible hadoop]# ansible all -m shell -a 'yum -y install java-1.8.0-openjdk-devel'
+**配置SSH信任关系
+#注意:不能出现要求输入yes的情况，每台机器都要能登陆成功，包括本机
+*修改配置
+[root@ansible hadoop]# vim /etc/ssh/ssh_config 
+ 58 Host *
+ 59         GSSAPIAuthentication yes
+ 60         StrictHostKeyChecking no 
+[root@ansible hadoop]# cd /root/.ssh/
+[root@ansible hadoop]# ssh-keygen -t rsa -b 2048 -N ''
+#拷贝公钥给其它虚拟机，包括自身，这点尤为重要
+[root@ansible hadoop]# ssh-copy-id -i id_rsa.pub db1 | db2 | web1 | ansible
+*配置全局配置文件：core-site.xml
+[root@ansible ~]# cd /usr/local/hadoop/etc/hadoop/
+[root@ansible hadoop]# vim core-site.xml
+<configuration> 
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://ansible:9000</value>
+  </property> 
+
+  <property>
+    <name>hadoop.tmp.dir</name>
+    <value>/var/hadoop</value>
+  </property>
+</configuration>
+*配置文件hdfs:hdfs-site.xml
+[root@ansible hadoop]# vim hdfs-site.xml
+<configuration>
+  <property>
+    <name>dfs.namenode.http-address</name>
+    <value>ansible:50070</value>
+  </property>
+
+  <property>
+    <name>dfs.namenode.secondary.http-address</name>
+    <value>ansible:50090</value>
+  </property>
+
+  <property>
+    <name>dfs.replication</name>
+    <value>2</value>
+  </property>
+*配置从服务
+[root@ansible hadoop]# vim slaves
+db1
+db2
+web1
+*rsync同步namenode相关文件到datanode
+[root@ansible hadoop]# yum -y install rsync
+[root@ansible hadoop]# ansible all -m shell -a 'yum -y install rsync'
+将dirA的所有文件同步到dirB内，并删除dirB内多余的文件;#源目录和目标目录结构一定要一致！！不能是dirA/* dirB/  或者dirA/ dirB/*  或者 dirA/* dirB/*
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop db1:/usr/local/ &
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop db2:/usr/local/ &
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop web1:/usr/local/ &
+*测试datanode的hadoop版本信息
+[root@db1 ~]# cd /usr/local/hadoop/
+[root@db1 hadoop]# ./bin/hadoop version
+*查看namenode的格式化信息
+[root@ansible hadoop]# ./bin/hdfs
+#此步骤仅供查看格式化信息
+[root@ansible hadoop]# ansible all -m shell -a 'cd /usr/local/hadoop && ./bin/hdfs'
+*格式化[namenode]
+[root@ansible hadoop]# ./bin/hdfs namenode -format
+*启动集群[namenode]
+[root@ansible hadoop]# ./sbin/start-dfs.sh
+*验证角色[所有机器]
+[root@ansible hadoop]# jps
+2213 SecondaryNameNode
+2453 Jps
+2026 NameNode
+[root@ansible hadoop]# ansible all -m shell -a 'jps'
+db1 | SUCCESS | rc=0 >>
+754 Elasticsearch
+1880 DataNode
+1997 Jps
+
+web1 | SUCCESS | rc=0 >>
+1825 DataNode
+753 Elasticsearch
+1964 Jps
+
+db2 | SUCCESS | rc=0 >>
+755 Elasticsearch
+1829 DataNode
+1946 Jps
+*验证角色[namenode]
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+... ...
+Live datanodes (3):
+... ...
+*配置mapred-site.xml
+[root@ansible hadoop]# /usr/local/hadoop/etc/hadoop
+[root@ansible hadoop]# mv mapred-site.xml.template mapred-site.xml
+[root@ansible hadoop]# vim mapred-site.xml
+ 19 <configuration>
+ 20   <property>
+ 21     <name>mapreduce.framework.name</name>
+ 22     <value>yarn</value>
+ 23   </property>
+ 24 </configuration>
+
+*配置yarn-site.xml
+ 15 <configuration>
+ 16 
+ 17 <!-- Site specific YARN configuration properties -->
+ 18 
+ 19   <property>
+ 20     <name>yarn.resourcemanager.hostname</name>
+ 21     <value>ansible</value>
+ 22   </property>
+ 23   <property>
+ 24     <name>yarn.nodemanager.aux-services</name>
+ 25     <value>mapreduce_shuffle</value>
+ 26   </property>
+ 27 
+ 28 </configuration>
+*把namenode中/etc/hadoop相关配置文件同步到datanode中去
+[root@ansible hadoop]# for i in db1 db2 web1;do rsync -aSH --delete /usr/local/hadoop/etc ${i}:/usr/local/hadoop/ -e 'ssh'; done
+#测试是否同步成功
+[root@ansible hadoop]# ansible all -m shell -a 'cat /usr/local/hadoop/etc/hadoop/yarn-site.xml'
+*启动服务
+[root@ansible hadoop]# ./sbin/start-yarn.sh 
+starting yarn daemons
+starting resourcemanager, logging to /usr/local/hadoop/logs/yarn-root-resourcemanager-ansible.out
+db1: starting nodemanager, logging to /usr/local/hadoop/logs/yarn-root-nodemanager-db1.out
+db2: starting nodemanager, logging to /usr/local/hadoop/logs/yarn-root-nodemanager-db2.out
+web1: starting nodemanager, logging to /usr/local/hadoop/logs/yarn-root-nodemanager-web1.out
+*验证角色[所有机器]
+[root@ansible hadoop]# jps
+3555 Jps
+2213 SecondaryNameNode
+2026 NameNode
+3290 ResourceManager	//新增
+763 Elasticsearch
+[root@ansible hadoop]# ansible all -m shell -a 'jps'
+web1 | SUCCESS | rc=0 >>
+1825 DataNode
+753 Elasticsearch
+2455 NodeManager	//新增，如下同
+2602 Jps
+
+db2 | SUCCESS | rc=0 >>
+2608 Jps
+755 Elasticsearch
+1829 DataNode
+2458 NodeManager
+
+db1 | SUCCESS | rc=0 >>
+2658 Jps
+754 Elasticsearch
+1880 DataNode
+2507 NodeManager
+*验证服务
+[root@ansible hadoop]# ./bin/yarn node -list
+19/01/02 14:33:33 INFO client.RMProxy: Connecting to ResourceManager at ansible/192.168.3.114:8032
+Total Nodes:3
+         Node-Id	     Node-State	Node-Http-Address	Number-of-Running-Containers
+      web1:42221	        RUNNING	        web1:8042	                           0
+       db1:32960	        RUNNING	         db1:8042	                           0
+       db2:38441	        RUNNING	         db2:8042	                           0
+*浏览器测试
+#namenode
+[root@ansible hadoop]# http://192.168.3.114:50070
+#secondarynamenode
+[root@ansible hadoop]# http://192.168.3.114:50090
+#ResourceManager
+[root@ansible hadoop]# http://192.168.3.114:8088
+#datanode
+[root@ansible hadoop]# http://192.168.3.116:8042
+#nodeManager
+[root@ansible hadoop]# http://192.168.3.116:50075
+*忽略如下报错信息
+[root@ansible hadoop]# ./bin/hadoop fs -mkdir /abc	//创建abc文件夹
+OpenJDK 64-Bit Server VM warning: INFO: os::commit_memory(0x00000000f6880000, 22020096, 0) failed; error='无法分配内存' (errno=12)
+#
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Native memory allocation (mmap) failed to map 22020096 bytes for committing reserved memory.
+# An error report file with more information is saved as:
+# /usr/local/hadoop/hs_err_pid3861.log
+[root@ansible hadoop]# ./bin/hadoop fs -mkdir /abc
+[root@ansible hadoop]# ./bin/hadoop fs -ls /	//完整写法:./bin/hadoop fs -ls hdfs://ansible:9000/
+#配置路径位置:[root@ansible hadoop]# cat -n etc/hadoop/core-site.xml
+    22	    <value>hdfs://ansible:9000</value>
+
+[root@ansible hadoop]# ./bin/hadoop fs -mkdir /abc
+[root@ansible hadoop]# ./bin/hadoop fs -ls /
+Found 1 items
+drwxr-xr-x   - root supergroup          0 2019-01-02 15:00 /abc
+
+[root@ansible hadoop]# ./bin/hadoop fs -touchz /reademe.txt	//创建文件
+[root@ansible hadoop]# ./bin/hadoop fs -ls /	//查看文件目录
+Found 2 items
+drwxr-xr-x   - root supergroup          0 2019-01-02 15:14 /abc
+-rw-r--r--   2 root supergroup          0 2019-01-02 15:23 /reademe.txt
+./bin/hadoop fs -cp reademe.txt /abc/	//复制错误指令
+./bin/hadoop fs -put reademe.txt /abc/	//复制错误指令
+./bin/hadoop fs -put *.txt /abc/		//复制/上传正确指令
+#网页查看文件信息：http://192.168.3.114:50070/explorer.html#/
+#拷贝/下载指令
+[root@ansible ~]# cd
+[root@ansible ~]# /usr/local/hadoop/bin/hadoop fs -get /abc/*.txt
+*验证数据
+[root@ansible hadoop]# ./bin/hadoop jar ./share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.6.jar wordcount hdfs://ansible:9000/abc hdfs://ansible:9000/result
+#查看数据
+[root@ansible hadoop]# ./bin/hadoop fs -cat /result/part-r-00000
+*浏览器查阅/下载分析后的数据
+http://192.168.3.114:50070/explorer.html#/	//文件首页
+http://db1:50075/webhdfs/v1/result/part-r-00000?op=OPEN&namenoderpcaddress=ansible:9000&offset=0	//下载文件
+*命令行下载分析后的文件
+[root@ansible ~]# /usr/local/hadoop/bin/hadoop fs -get hdfs://ansible:9000/result/*
+
+**hadoop之HDFS增加yarn节点
+192.168.3.126	cache
+*禁用selinux
+cache]# vim /etc/selinux/config
+SELINUX=disabled
+cache]# getenforce
+*禁用firewalld
+cache]#systemctl stop firewalld
+cache]systemctl mask firewalld
+*设置SSH免密登陆
+#拷贝公钥给其它虚拟机，包括自身，这点尤为重要
+[root@ansible hadoop]# ssh-copy-id -i /root/.ssh/id_rsa.pub cache
+*在所有节点修改/etc/hosts,增加新节点的主机信息
+... ...
+*安装java-1.8.0-openjdk-devel
+[root@ansible ~]# ansible all -m shell -a 'yum -y install java-1.8.0-openjdk-devel'
+*拷贝namenode的/usr/local/hadoop到本机
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop cache:/usr/local/ &
+[root@ansible hadoop]# wait
+*修改namenode的slave文件增加该节点,重点:每个虚拟机都要有此文件配置
+[root@ansible hadoop]# vim etc/hadoop/slaves
+db1
+db2
+web1
+cache
+*在该节点启动datanode
+[root@ansible hadoop]# /usr/local/hadoop/sbin/hadoop-daemon.sh start datanode
+*设置带宽，迁移数据，实现数据平衡
+[root@ansible hadoop]# ./bin/hdfs dfsadmin	//查看帮助指令
+#设置带宽
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -setBalancerBandwidth 6000000
+#迁移数据
+[root@ansible hadoop]# ./sbin/start-balancer.sh
+#参看数据平衡后的详细信息
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+[root@ansible hadoop]# lftp 192.168.3.254
+lftp 192.168.3.254:~> get node.img
+[root@ansible hadoop]# ./bin/hadoop fs -put node.img hdfs://ansible:9000/basic.img
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+cache	db1	web1	db2
+8kb	340kb	184kb	180kb	//上传node.img文件前容量
+387M	774M	714M	963M	//上传node.img文件后容量
+387M	1.02G	1.07G	1.07G
+注释:数据上传分数与其下信息有关
+[root@ansible hadoop]# cat etc/hadoop/hdfs-site.xml
+  <property>
+    <name>dfs.replication</name>
+    <value>2</value>
+  </property>
+
+*删除节点
+[root@ansible hadoop]# vim etc/hadoop/hdfs-site.xml
+#增加如下信息
+  <property>
+    <name>dfs.hosts.exclude</name>
+    <value>/usr/local/hadoop/etc/dadoop/exclude</value>
+  </property>
+[root@ansible hadoop]# touch etc/hadoop/exclude
+[root@ansible hadoop]# vim etc/hadoop/exclude
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+Name: 192.168.3.126:50010 (cache)
+Hostname: cache
+Decommission Status : Normal	//正常
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -refreshNodes
+Refresh nodes successful
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+Name: 192.168.3.126:50010 (cache)
+Hostname: cache
+Decommission Status : Decommission in progress	//数据迁移中，拷贝状态
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+Name: 192.168.3.126:50010 (cache)
+Hostname: cache
+Decommission Status : Decommissioned	//数据迁移完成
+注意:近当状态变成Decommissioned,才能down机下线
+
+**节点管理
+#查看nodemanager节点信息
+[root@ansible hadoop]# ./bin/yarn node -list
+... ...
+Total Nodes:3	//3
+... ...
+*增加节点
+[root@ansible hadoop]# ansible cache -m shell -a '/usr/local/hadoop/sbin/yarn-daemon.sh start nodemanager'
+#查看nodemanager节点信息
+[root@ansible hadoop]# ./bin/yarn node -list
+... ...
+Total Nodes:3	//4
+... ...
+*删除节点
+[root@ansible hadoop]# ansible cache -m shell -a '/usr/local/hadoop/sbin/yarn-daemon.sh stop nodemanager'
+*删除节点
+[root@cache ~]# /usr/local/hadoop/sbin/hadoop-daemon.sh stop datanode
+
+
+**NFS网关配置
+cache作为NFS网关机器
+1*修改/etc/hosts同步给所有主机
+ansible]# ansible all -m copy -a 'src=/etc/hosts dest=/etc/hosts'
+2*配置代理用户
+-在namenode(ansible)和nfsgw(cache)上添加代理用户
+-代理用户的UID,GID,用户名必须完全相同
+[root@ansible hadoop]# groupadd -g 200 nfsuser
+[root@ansible hadoop]# useradd -u 200 -g 200 -r nfsuser
+[root@ansible hadoop]# id nfsuser
+[root@ansible hadoop]# ansible cache -m shell -a 'groupadd -g 200 nfsuse'
+[root@ansible hadoop]# ansible cache -m shell -a 'useradd -u 200 -g 200 -r nfsuser'
+[root@ansible hadoop]# ansible cache -m shell -a 'id nfsuser'
+3*停止集群/关停全部节点
+[root@ansible hadoop]# ./sbin/stop-all.sh
+注释：如有报节点错误，请删除slave的节点虚拟机
+#为了方便查看后续日志信息，删除原有日志
+[root@ansible hadoop]# rm -rf logs/*
+*配置core-site.xml文件
+[root@ansible hadoop]# vim etc/hadoop/core-site.xml	//更新到所有主机
+#添加如下内容
+  <property>
+    <name>hadoop.proxyuser.nfsuser.groups</name>
+    <value>*</value>
+  </property>
+  
+<property>
+    <name>hadoop.proxyuser.nfsuser.hosts</name>
+    <value>*</value>
+  </property>
+[root@ansible hadoop]# vim etc/hadoop/slaves	//删除cache
+[root@ansible hadoop]# [root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop db1:/usr/local/ &
+[root@ansible hadoop]# [root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop db2:/usr/local/ &
+[root@ansible hadoop]# [root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop web1:/usr/local/ &
+[root@ansible hadoop]# wait
+*启动集群
+[root@ansible hadoop]# ./sbin/start-dfs.sh
+#删除cache的hadoop信息
+[root@ansible hadoop]# ansible cache -m shell -a 'rm -rf /usr/local/hadoop/'
+#验证角色
+[root@ansible hadoop]# ./bin/hdfs dfsadmin -report
+#查看java信息
+[root@ansible hadoop]# jps
+[root@ansible hadoop]# ansible all -m shell -a 'jps'
+*同步ansible的信息到cache,并删除logs的日志
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop cache:/usr/local/ &
+[root@ansible hadoop]# wait
+[root@ansible hadoop]# ansible cache -m shell -a 'rm -rf /usr/local/hadoop/logs/*'
+[root@cache hadoop]# cd /usr/local/hadoop/etc/hadoop
+[root@cache hadoop]# vim hdfs-site.xml
+如下四行为取出数据
+#  <property>
+#    <name>dfs.hosts.exclude</name>
+#    <value>/usr/local/hadoop/etc/hadoop/exclude</value>
+#  </property>
+//增加如下内容  
+  <property>
+    <name>nfs.exports.allowed.hosts</name>
+    <value>* rw</value>
+  </property>
+  
+  <property>
+    <name>nfs.dump.dir</name>
+    <value>/var/nfstmp</value>
+  </property>
+[root@cache hadoop]# mkdir /var/nfstmp
+[root@cache hadoop]# chown 200.200 /var/nfstmp/
+[root@cache hadoop]# cd ../..
+#为代理用户赋予读写执行的权限
+[root@cache hadoop]# setfacl -m user:nfsuser:rwx logs
+[root@cache hadoop]# getfacl logs
+# file: logs
+# owner: root
+# group: root
+user::rwx
+user:nfsuser:rwx
+group::r-x
+mask::rwx
+other::r-x
+#测试nfsuser用户能否在logs下写日志
+[root@cache hadoop]# su -l nfsuser
+su: user nsfuser does not exist
+[root@cache hadoop]# su -l nfsuser
+su: 警告：无法更改到 /home/nfsuser 目录: 没有那个文件或目录
+-bash-4.2$ cd /var/nfstmp/
+-bash-4.2$ ls
+-bash-4.2$ touch ff
+-bash-4.2$ ls
+ff
+-bash-4.2$ rm -rf ff
+-bash-4.2$ ls
+-bash-4.2$ 
+*root权限启动portmap服务
+[root@cache hadoop]# ./sbin/hadoop-daemon.sh --script ./bin/hdfs start portmap
+starting portmap, logging to /usr/local/hadoop/logs/hadoop-root-portmap-cache.out
+[root@cache hadoop]# jps
+5864 Jps
+5818 Portmap
+*nfsuser权限启动nfs3服务
+[root@cache hadoop]# sudo -u nfsuser ./sbin/hadoop-daemon.sh --script ./bin/hdfs start nfs3
+starting nfs3, logging to /usr/local/hadoop/logs/hadoop-nfsuser-nfs3-cache.out
+[root@cache hadoop]# jps
+5891 Nfs3
+5944 Jps
+5818 Portmap
+**nfsBackup挂载cache服务
+*准备一台虚拟机nfsBackup,关闭selinux,firewalld,配置yum源
+*安装nfs-utils
+[root@nfsbackup ~]# yum -y install vim nfs-utils
+*挂载
+[root@nfsbackup ~]# mount -t nfs -o vers=3,proto=tcp,noatime,nolock,sync 192.168.3.126:/ /mnt/
+[root@nfsbackup ~]# cd /mnt/
+[root@nfsbackup mnt]# ls
+abc  basic.img  reademe.txt  result  system  tmp
+[root@nfsbackup ~]# df -h
+文件系统         容量  已用  可用 已用% 挂载点
+/dev/vda1         16G  1.1G   15G    7% /
+devtmpfs         991M     0  991M    0% /dev
+tmpfs           1001M     0 1001M    0% /dev/shm
+tmpfs           1001M  8.5M  992M    1% /run
+tmpfs           1001M     0 1001M    0% /sys/fs/cgroup
+tmpfs            201M     0  201M    0% /run/user/0
+192.168.3.126:/   48G   12G   37G   24% /mnt
+
+#查看cache服务信息
+[root@nfsbackup ~]# rpcinfo -p 192.168.3.126
+   program vers proto   port  service
+    100005    3   udp   4242  mountd
+    100005    1   tcp   4242  mountd
+    100000    2   udp    111  portmapper
+    100000    2   tcp    111  portmapper
+    100005    3   tcp   4242  mountd
+    100005    2   tcp   4242  mountd
+    100003    3   tcp   2049  nfs
+    100005    2   udp   4242  mountd
+    100005    1   udp   4242  mountd
+
+**安装zookeeper
+[root@ansible ~]# tar -zxf zookeeper-3.4.10.tar.gz
+[root@ansible ~]# mv zookeeper-3.4.10 /usr/local/zookeeper
+[root@ansible pub]# cd /usr/local/zookeeper/conf
+[root@ansible conf]# mv zoo_sample.cfg zoo.cfg 
+[root@ansible conf]# vim zoo.cfg
+ 29 server.1=db1:2888:3888
+ 30 server.2=db2:2888:3888
+ 31 server.3=web1:2888:3888
+ 32 server.4=ansible:2888:3888:observer
+[root@ansible conf]# mkdir /tmp/zookeeper
+[root@ansible conf]# echo 4 > /tmp/zookeeper/myid	//把对应的号写入myid文件
+*rsync同步ansible的zookeeper内容到其它虚拟机上
+[root@ansible conf]# rsync -aSH --delete /usr/local/zookeeper db1:/usr/local/ &
+[root@ansible conf]# rsync -aSH --delete /usr/local/zookeeper web1:/usr/local/ &
+[root@ansible conf]# rsync -aSH --delete /usr/local/zookeeper web1:/usr/local/ &
+[root@ansible conf]# for i in db1 db2 web1;do
+> ssh ${i} "mkdir /tmp/zookeeper"
+> done
+[root@ansible conf]# ansible db1 -m shell -a 'echo 1 > /tmp/zookeeper/myid'
+[root@ansible conf]# ansible db2 -m shell -a 'echo 2 > /tmp/zookeeper/myid'
+[root@ansible conf]# ansible web1 -m shell -a 'echo 3 > /tmp/zookeeper/myid'
+[root@ansible conf]# ansible all -m shell -a 'cat /tmp/zookeeper/myid'
+*启动zookeeper服务
+[root@ansible conf]# /usr/local/zookeeper/bin/zkServer.sh start
+[root@ansible conf]# jps
+15344 QuorumPeerMain
+15364 Jps
+12728 NameNode
+763 Elasticsearch
+12924 SecondaryNameNode
+[root@ansible conf]# /usr/local/zookeeper/bin/zkServer.sh status
+#查看ansible的zookeeper的状态信息
+[root@ansible conf]# /usr/local/zookeeper/bin/zkServer.sh status
+ZooKeeper JMX enabled by default
+Using config: /usr/local/zookeeper/bin/../conf/zoo.cfg
+Mode: observer
+#查看db1的zookeeper的状态信息
+[root@db1 ~]# /usr/local/zookeeper/bin/zkServer.sh status
+ZooKeeper JMX enabled by default
+Using config: /usr/local/zookeeper/bin/../conf/zoo.cfg
+Mode: follower
+#查看db2的zookeeper的状态信息
+[root@db2 ~]# /usr/local/zookeeper/bin/zkServer.sh status
+ZooKeeper JMX enabled by default
+Using config: /usr/local/zookeeper/bin/../conf/zoo.cfg
+Mode: follower
+#查看web1的zookeeper的状态信息
+[root@web1 hadoop]# /usr/local/zookeeper/bin/zkServer.sh status
+ZooKeeper JMX enabled by default
+Using config: /usr/local/zookeeper/bin/../conf/zoo.cfg
+Mode: leader
+注释:zookeeper管理文档
+http://zookeeper.apache.org/doc/r3.4.10/zookeeperAdmin.html
+*socat测试通讯连同性
+[root@ansible conf]# yum -y install socat
+[root@ansible conf]# socat - TCP4:db1:2181
+ruok
+imok[root@ansible conf]# 
+#询问配置文件
+[root@ansible conf]# socat - TCP4:web1:2181
+conf
+clientPort=2181
+dataDir=/tmp/zookeeper/version-2
+dataLogDir=/tmp/zookeeper/version-2
+tickTime=2000
+maxClientCnxns=60
+minSessionTimeout=4000
+maxSessionTimeout=40000
+serverId=3
+initLimit=10
+syncLimit=5
+electionAlg=3
+electionPort=3888
+quorumPort=2888
+peerType=0
+#socat询问zookeeper状态信息
+[root@ansible conf]# socat - TCP4:web1:2181
+stat
+Zookeeper version: 3.4.10-39d3a4f269333c922ed3db283be479f9deacaa0f, built on 03/23/2017 10:13 GMT
+Clients:
+ /192.168.3.114:53542[0](queued=0,recved=1,sent=0)
+
+Latency min/avg/max: 0/0/0
+Received: 6
+Sent: 5
+Connections: 1
+Outstanding: 0
+Zxid: 0x100000000
+Mode: leader	//leader状态
+Node count: 4
+*重定向测试通讯连同性
+[root@ansible conf]# cat <&8
+imok[root@ansible conf]# 
+[root@ansible conf]# exec 8<>/dev/tcp/db1/2181
+[root@ansible conf]# echo "ruok" >&8
+*脚本测试各zookeeper机器的状态信息
+[root@ansible ~]# vim zkstats
+#!/bin/bash
+function getzkstat(){
+    exec 2>/dev/null
+    exec 8<>/dev/tcp/$1/2181
+    echo stat >&8
+    Msg=$(cat <&8 |grep -P "^Mode:")
+    echo -e "$1\t${Msg:-Mode: \x1b[31mNULL\x1b[0m}"
+    exec 8<&-
+}
+
+if (( $# == 0 ));then
+    echo "${0##*/} zk1 zk2 zk3 ... ..."
+else
+    for i in $@;do
+        getzkstat ${i}
+    done
+fi
+[root@ansible ~]# sh zkstats ansible
+ansible	Mode: observer
+[root@ansible ~]# sh zkstats ansible db1 db2 web1
+ansible	Mode: observer
+db1	Mode: follower
+db2	Mode: follower
+web1	Mode: leader
+
+**kafka集群消息队列的安装配置
+*kafka集群的安装配置依赖zookeeper,搭建kafka集群之前，先创建好一个可用的zookeeper集群
+*安装openjdk运行环境
+*同步kafka拷贝到所有集群主机
+[root@ansible ~]# tar -zxf kafka_2.10-0.10.2.1.tgz
+[root@ansible ~]# mv kafka_2.10-0.10.2.1 /usr/local/kafka
+[root@ansible ~]# cd /usr/local/kafka/
+[root@ansible kafka]# ls
+bin  config  libs  LICENSE  NOTICE  site-docs
+[root@ansible config]# cd conf/
+[root@ansible config]# vim server.properties
+ 21 broker.id=5
+119 zookeeper.connect=db1:2181,db2:2181,web1:2181
+[root@ansible ~]# rsync -aSH --delete /usr/local/kafka db1:/usr/local/ &
+[root@ansible ~]# rsync -aSH --delete /usr/local/kafka db2:/usr/local/ &
+[root@ansible ~]# rsync -aSH --delete /usr/local/kafka web1:/usr/local/ &
+[root@ansible ~]# wait
+*修改配置文件
+[root@ansible ~]# cd /usr/local/kafka/config/
+[root@ansible config]# vim server.properties	//db1,db2,web1
+ 21 broker.id=6|7|8
+*db1|db2|web1启动和验证
+[root@db1|db2|web1 config]# /usr/local/kafka/bin/kafka-server-start.sh -daemon /usr/local/kafka/config/server.properties
+[root@db1|db2|web1 config]# jps
+#创建主题db1
+[root@db1 kafka]# ./bin/kafka-topics.sh --create --partitions 1 --replication-factor 1 --zookeeper web1:2181 --topic mymsg
+Created topic "mymsg".
+#(生产者)发布消息db2
+[root@db2 kafka]# ./bin/kafka-console-producer.sh --broker-list localhost:9092 --topic mymsg
+--如下为db2,web1互相同步的消息，即生产者发布给消费者的数据
+aaa
+ccc
+... ...
+#(消费者)消费消息web1
+[root@web1 kafka]# ./bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic mymsg
+--如下为db2,web1互相同步的消息
+aaa
+ccc
+... ...
+*db1|db2|web1停止和验证
+[root@db1|db2|web1 config]# /usr/local/kafka/bin/kafka-server-start.sh -daemon /usr/local/kafka/config/server.properties
+[root@db1|db2|web1 config]# jps
+
+
+
+**配置hadoop高可用
+*ansible中停止集群所有服务
+[root@ansible hadoop]# /usr/local/hadoop/sbin/stop-dfs.sh
+*准备一台虚拟机ansibleBackup,关闭selinux,firewalld,配置yum源
+*安装java-1.8.0-openjdk-devel,rsync
+[root@ansibleBackup ~]# yum -y install vim nfs-utils java-1.8.0-openjdk-devel rsync
+*相应服务器配置/etc/hosts
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+192.168.3.114   ansible
+192.168.3.157   web1
+192.168.3.196   ansibleBackup
+192.168.3.159   db1
+192.168.3.116   db2
+192.168.3.126   cache
+[root@ansibleBackup ~]# jps
+*实现ansible至ansibleBackup的免密登陆,同时实现ansibleBackup至其它服务器的免密登陆
+[root@ansible hadoop]# rsync -aSH --delete /root/.ssh ansibleBackup:/root/
+root@ansiblebackup's password: 
+[root@ansible hadoop]# ssh ansibleBackup
+Last login: Fri Jan  4 10:24:01 2019 from 192.168.3.114
+[root@ansiblebackup ~]#
+[root@ansiblebackup ~]# rm -rf /root/.ssh/known_hosts
+[root@ansiblebackup ~]# vim /etc/ssh/ssh_config
+ 58 Host *
+ 59         GSSAPIAuthentication yes
+ 60         StrictHostKeyChecking no
+[root@ansiblebackup ~]# ssh cache
+Warning: Permanently added 'cache,192.168.3.126' (ECDSA) to the list of known hosts.
+Last login: Fri Jan  4 10:30:34 2019 from 192.168.3.196
+[root@cache ~]# 
+*同步ansible的hadoop相关文件至ansibleBackup
+[root@ansiblebackup ~]# mkdir /var/hadoop
+[root@ansiblebackup ~]# rsync -aSH --delete ansible:/usr/local/hadoop /usr/local/
+*删除namenode,datanode的/var/hadoop/下的文件
+[root@ansible hadoop]# ansible all -m shell -a 'rm -rf /var/hadoop/*'
+[root@ansible hadoop]# rm -rf /var/hadoop/*
+*启动各服务器的zookeeper
+[root@ansible hadoop]# /usr/local/zookeeper/bin/zkServer.sh start
+[root@ansible hadoop]# ansible all -m shell -a '/usr/local/zookeeper/bin/zkServer.sh start'
+#查看各服务器的zookeeper的状态
+[root@ansible hadoop]# sh /root/zkstats ansible db1 db2 web1
+ansible	Mode: observer
+db1	Mode: follower
+db2	Mode: follower
+web1	Mode: leader
+
+*配置core-site.xml
+[root@ansible hadoop]# vim core-site.xml
+<configuration>
+<!--  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://ansible:9000</value>
+  </property>
+-->
+
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://qun</value>
+  </property>
+
+  <property>
+    <name>ha.zookeeper.quorum</name>
+    <value>db1:2181,db2:2181,web1:2181</value>
+  </property>
+
+  <property>
+    <name>hadoop.tmp.dir</name>
+    <value>/var/hadoop</value>
+  </property>
+
+  <property>
+    <name>hadoop.proxyuser.nfsuser.groups</name>
+    <value>*</value>
+  </property>
+
+<property>
+    <name>hadoop.proxyuser.nfsuser.hosts</name>
+    <value>*</value>
+  </property>
+
+</configuration>
+
+*配置hdfs-site.xml
+[root@ansible hadoop]# vim hdfs-site.xml 
+<configuration>
+<!--  <property>
+    <name>dfs.namenode.http-address</name>
+    <value>ansible:50070</value>
+  </property> 
+
+  <property>
+    <name>dfs.namenode.secondary.http-address</name>
+    <value>ansible:50090</value>
+  </property> 
+-->
+<!-- 指定hdfs的nameservices名称为qun -->
+  <property>
+    <name>dfs.nameservices</name>
+    <value>qun</value>
+  </property>
+<!-- 指定集群的两个namenode的名称分别为ansible,ansibleBackup -->
+  <property>
+    <name>dfs.ha.namenodes.qun</name>
+    <value>nn1,nn2</value>
+  </property>
+<!-- 配置ansible,ansibleBackup的rpc通信端口 -->
+  <property>
+    <name>dfs.namenode.rpc-address.qun.nn1</name>
+    <value>ansible:8020</value>
+  </property>
+
+  <property>
+    <name>dfs.namenode.rpc-address.qun.nn2</name>
+    <value>ansibleBackup:8020</value>
+  </property>
+<!-- 配置ansible,ansibleBackup的http通信端口 -->
+  <property>
+    <name>dfs.namenode.http-address.qun.nn1</name>
+    <value>ansible:50070</value>
+  </property>
+
+  <property>
+    <name>dfs.namenode.http-address.qun.nn2</name>
+    <value>ansibleBackup:50070</value>
+  </property>
+<!-- 指定namenode元数据存储在journalnode中的路径 -->
+  <property>
+    <name>dfs.namenode.shared.edits.dir</name>
+    <value>qjournal://db1:8485;db2:8485;web1:8485/qun</value>
+  </property>
+<!-- 指定journalnode日志文件存储的路径 -->
+  <property>
+    <name>dfs.journalnode.edits.dir</name>
+    <value>/var/hadoop/journal</value>
+  </property>
+<!-- 指定hdfs客户端连接active namenode的java类 -->
+  <property>
+    <name>dfs.client.failover.proxy.provider.qun</name>
+    <value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
+  </property>
+<!-- 配置隔离机制为ssh -->
+  <property>
+    <name>dfs.ha.fencing.methods</name>
+    <value>sshfence</value>
+  </property>
+<!-- 指定密钥的位置 -->
+  <property>
+    <name>dfs.ha.fencing.ssh.private-key-files</name>
+    <value>/root/.ssh/id_rsa</value>
+  </property>
+<!-- 开启自动故障转移 -->
+  <property>
+    <name>dfs.ha.automatic-failover.enabled</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>dfs.replication</name>
+    <value>2</value>
+  </property>
+
+  <property>
+    <name>dfs.hosts.exclude</name>
+    <value>/usr/local/hadoop/etc/hadoop/exclude</value>
+  </property>
+</configuration>
+xxx不执行[root@ansible hadoop]# ansible all -m shell -a 'mkdir /var/hadoop/journal'
+xxx不执行[root@ansible hadoop]# mkdir /var/hadoop/journal
+xxx不执行[root@ansiblebackup ~]# mkdir /var/hadoop/journal
+
+*yarn高可用
+RM(resourcemanager)的高可用原理与NN一样，需要依赖ZK来实现
+[root@ansible hadoop]# vim yarn-site.xml
+<configuration>
+
+<!-- Site specific YARN configuration properties -->
+
+<!--  <property>
+    <name>yarn.resourcemanager.hostname</name>
+    <value>ansible</value>
+  </property>
+-->
+
+  <property>
+    <name>yarn.resourcemanager.ha.enabled</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.ha.rm-ids</name>
+    <value>rm1,rm2</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.recovery.enabled</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.store.class</name>
+    <value>org.apache.hadoop.yarn.server.resourcemanager.recovery.ZKRMStateStore</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.zk-address</name>
+    <value>db1:2181,db2:2181,web1:2181</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.cluster-id</name>
+    <value>yarn-ha</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.hostname.rm1</name>
+    <value>ansible</value>
+  </property>
+
+  <property>
+    <name>yarn.resourcemanager.hostname.rm2</name>
+    <value>ansibleBackup</value>
+  </property>
+
+  <property>
+    <name>yarn.nodemanager.aux-services</name>
+    <value>mapreduce_shuffle</value>
+  </property>
+
+</configuration>
+
+**集群初始化
+*同步ansible的hadoop配置到其它服务器(ansibleBackup,db1,db2,web1)
+[root@ansible hadoop]# for i in ansibleBackup db1 db2 web1;do
+> rsync -aSH --delete /usr/local/hadoop ${i}:/usr/local/ &
+> done
+[1] 21852
+[2] 21853
+[3] 21854
+[4] 21855
+[root@ansible hadoop]# wait
+*删除所有机器上面的/user/local/hadoop/logs,方便排错
+[root@ansible hadoop]# ansible all -m shell -a 'rm -rf /usr/local/hadoop/logs/*'
+*ansible初始化ZK(zookeeper)集群
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs zkfc -formatZK
+... ...
+19/01/04 14:22:24 INFO ha.ActiveStandbyElector: Successfully created /hadoop-ha/qun in ZK.
+... ...
+*启动db1,db2,web1的journalnode服务
+[root@ansible hadoop]# ansible all -m shell -a '/usr/local/hadoop/sbin/hadoop-daemon.sh start journalnode'
+[root@ansible hadoop]# ansible all -m shell -a 'jps'
+*格式化ansible
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs namenode -format
+... ...
+19/01/04 14:31:36 INFO common.Storage: Storage directory /var/hadoop/dfs/name has been successfully formatted.
+... ...
+*ansibleBackup数据同步到本地/var/hadoop/dfs
+[root@ansiblebackup ~]# rsync -aSH --delete ansible:/var/hadoop/dfs /var/hadoop/
+*ansible初始化
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs namenode -initializeSharedEdits
+... ...
+19/01/04 15:05:38 INFO client.QuorumJournalManager: Successfully started new epoch 1
+... ...
+*db1,db2,web1服务器停止journalNode服务
+[root@ansible hadoop]# ansible all -m shell -a '/usr/local/hadoop/sbin/hadoop-daemon.sh stop journalnode'
+web1 | SUCCESS | rc=0 >>
+stopping journalnode
+
+db2 | SUCCESS | rc=0 >>
+stopping journalnode
+
+db1 | SUCCESS | rc=0 >>
+stopping journalnode
+[root@ansible hadoop]# ansible all -m shell -a 'jps'
+
+**启动集群
+*ansible启动hadoop集群
+[root@ansible hadoop]# /usr/local/hadoop/sbin/start-all.sh
+*启动热备ResourceManager
+[root@ansiblebackup ~]# /usr/local/hadoop/sbin/yarn-daemon.sh start resourcemanager
+starting resourcemanager, logging to /usr/local/hadoop/logs/yarn-root-resourcemanager-ansiblebackup.out
+
+**查看集群状态
+*获取namenode状态
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn1
+active
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn2
+standby
+*获取resourcemanager状态
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn rmadmin -getServiceState rm1
+standby
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn rmadmin -getServiceState rm2
+active
+*获取节点信息
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs dfsadmin -report
+... ...
+Live datanodes (3):
+... ...
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn  node  -list
+19/01/04 21:52:22 INFO client.ConfiguredRMFailoverProxyProvider: Failing over to rm2
+Total Nodes:3
+         Node-Id	     Node-State	Node-Http-Address	Number-of-Running-Containers
+       db1:36997	        RUNNING	         db1:8042	                           0
+       db2:36382	        RUNNING	         db2:8042	                           0
+      web1:42608	        RUNNING	        web1:8042	                           0
+
+**访问集群
+*查看并创建
+[root@ansible hadoop]# /usr/local/hadoop/bin/hadoop  fs -ls  /
+[root@ansible hadoop]# /usr/local/hadoop/bin/hadoop  fs -mkdir /aa
+[root@ansible hadoop]# /usr/local/hadoop/bin/hadoop  fs -ls  /
+Found 1 items
+drwxr-xr-x   - root supergroup          0 2019-01-04 21:54 /aa
+[root@ansible hadoop]# ls *.txt
+LICENSE.txt  NOTICE.txt  README.txt
+[root@ansible hadoop]# /usr/local/hadoop/bin/hadoop  fs -put *.txt /aa
+[root@ansible hadoop]# /usr/local/hadoop/bin/hadoop  fs -ls hdfs://qun/aaFound 3 items
+-rw-r--r--   2 root supergroup      86424 2019-01-04 21:55 hdfs://qun/aa/LICENSE.txt
+-rw-r--r--   2 root supergroup      14978 2019-01-04 21:55 hdfs://qun/aa/NOTICE.txt
+-rw-r--r--   2 root supergroup       1366 2019-01-04 21:55 hdfs://qun/aa/README.txt
+*验证高可用，关闭 active namenode
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn1
+active
+[root@ansible hadoop]# /usr/local/hadoop/sbin/hadoop-daemon.sh stop namenode
+stopping namenode
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn1 
+报错信息
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn2
+active	//ansibleBackup由之前的standby变为active
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn rmadmin -getServiceState rm1
+active
+[root@ansible hadoop]# /usr/local/hadoop/sbin/yarn-daemon.sh stop resourcemanager
+stopping resourcemanager
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn rmadmin -getServiceState rm2
+active
+
+*恢复节点
+[root@ansible hadoop]# /usr/local/hadoop/sbin/hadoop-daemon.sh start namenode
+starting namenode, logging to /usr/local/hadoop/logs/hadoop-root-namenode-ansible.out
+[root@ansible hadoop]# /usr/local/hadoop/bin/hdfs haadmin -getServiceState nn1 
+standby
+[root@ansible hadoop]# /usr/local/hadoop/sbin/yarn-daemon.sh start resourcemanager
+starting resourcemanager, logging to /usr/local/hadoop/logs/yarn-root-resourcemanager-ansible.out
+[root@ansible hadoop]# /usr/local/hadoop/bin/yarn rmadmin -getServiceState rm1
+standby
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*mount nfs服务
+只支持版本3，
+只支持tcp,
+不支持NLM
+
+
+
+
+/usr/local/hadoop/etc/dadoop/exclude
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#比较两个不同文件的区别
+vim -O ifcfg-eth0 ifcfg-eth1
+vimdiff ifcfg-eth0 ifcfg-eth1
+diff -y --suppress-common-lines ifcfg-eth0 ifcfg-eth1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[root@ansible hadoop]# rsync -aSH --delete /usr/local/hadoop db1:/usr/local/ &
+
+[root@nfs ~]# mount -t iso9660 -o ro,loop /iso/CentOS7-1708.iso /var/ftp/centos7/
+
+
+ceph优点
+文件系统共享100B	mount
+块共享100PB		sda
+对象存储(写代码)
+
+
+
+
+
+
+hadoop文档
+https://hadoop.apache.org/docs/r2.7.6
+
+
+
+
